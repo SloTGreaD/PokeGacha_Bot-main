@@ -5,7 +5,7 @@ import functions
 import sqlite3
 import logging
 # Загрузка токена из переменных окружения
-bot = telebot.TeleBot("6831587612:AAEUQ4m30-Pajetdnw0AwZ4omaNmzVkc-4o")
+bot = telebot.TeleBot(functions.poke_bot_api)
 
 found_pokemon = []
 
@@ -14,16 +14,17 @@ helpinfo = """
 
 /start - Начать поиск покемона
 /help - Вывести это сообщение справки
-/go - Попробовать поймать покемона
-/keepgoing - Продолжить поиски
-/skip - Пропустить и попробовать еще раз
-/retry - Повторить попытку
+/pokedex - Показать Покемонов
 
 <b>Дополнительные команды:</b>
 /help - Вывести это сообщение справки
 
 <b>Обратите внимание:</b>
 - После каждой успешной или неудачной попытки поиска вам будут предоставлены соответствующие опции.
+go - Попробовать поймать покемона
+keepgoing - Продолжить поиски
+skip - Пропустить и попробовать еще раз
+retry - Повторить попытку
 - Удачи в поисках покемонов!
 """
 
@@ -34,33 +35,16 @@ class PokemonBot:
         # Словарь для хранения состояний пользователей
         self.states = {}
         # Создаем таблицу для спойманных покемонов
-        conn = sqlite3.connect('pokedex.sql')
-        cur = conn.cursor()
-        cur.execute('''
-        CREATE TABLE IF NOT EXISTS captured_pokemons (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        found_pokemon VARCHAR(50),
-        captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        ''')
-        conn.commit()
-        conn.close()
+        functions.create_captured_pokemons_table()
+        functions.create_number_of_pokemons()
 
     def capture_pokemon(self, user_id, found_pokemon):
-        conn = sqlite3.connect('pokedex.sql')
-        cur = conn.cursor()
-        cur.execute("INSERT INTO captured_pokemons (user_id, found_pokemon) VALUES (?, ?)", (user_id, found_pokemon))
-        conn.commit()
-        conn.close()
+        functions.capture_pokemon(user_id, found_pokemon)
 
     def start(self, message):
         
-        conn = sqlite3.connect('pokedex.sql')
-        cur = conn.cursor()
-        cur.execute('CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, name varchar(50))')
-        conn.commit()
-        conn.close()
+        functions.create_users_table()
+        functions.add_user_to_number_of_pokemons(message.chat.id) #добавляет только новых юзеров
         # Приветственное сообщение при старте
         bot.send_message(message.chat.id, f"Hi, {message.from_user.first_name}")
         self.show_go_buttons(message.chat.id)
@@ -70,18 +54,16 @@ class PokemonBot:
 
         # Обработка нажатия кнопок "Go", "Keep going", "Skip"
         if call.data in ['go', 'keepgoing', 'skip']:
-            
+            found_pokemon.clear()
             if call.data in ['keepgoing', 'skip']:
                 bot.delete_message(call.message.chat.id, call.message.message_id) 
-                found_pokemon.clear()     # удаляет сообщение в котором было нажато "keepgoing"
+                    # удаляет сообщение в котором было нажато "keepgoing"
             if random.choice([True, False]):
                 self.states[chat_id] = 'choose_catch_or_skip'
                 self.show_catch_or_skip_buttons(chat_id, call.message.message_id)
-                found_pokemon.clear()
             else:
                 self.states[chat_id] = 'choose_find_or_skip'
                 self.back_to_start(chat_id, call.message.message_id)
-                found_pokemon.clear()
 
 
 
@@ -106,13 +88,7 @@ class PokemonBot:
         elif call.data == 'pokedex':
             self.show_pokedex(chat_id, call.message.message_id)
             
-            
 
-    def callback_handler(self, call):
-        # Обработка команды "help"
-        if call.data == 'help':
-            bot.answer_callback_query(call.id)
-            bot.send_message(call.message.chat.id, helpinfo)
 
     def show_go_buttons(self, chat_id):
         # Отправка кнопки "Go" для начала поиска покемона
@@ -133,17 +109,7 @@ class PokemonBot:
 
 
     def show_pokedex(self, chat_id):
-        conn = sqlite3.connect('pokedex.sql')
-        cur = conn.cursor()
-        cur.execute('SELECT * FROM captured_pokemons')
-        info = cur.fetchall()
-        pokedex = ''
-        for el in info:
-            # Убедитесь, что здесь правильно форматируете строку, например:
-            pokedex += f"Pokemon: {el[0]}, Captured At: {el[1]}\n"
-        cur.close()
-        conn.close()
-
+        pokedex = functions.show_pokedex(chat_id)
         # Проверка на пустую строку 'pokedex' перед отправкой
         if pokedex.strip() == '':
             bot.send_message(chat_id, "No Pokemons have been captured yet.")
@@ -164,7 +130,7 @@ class PokemonBot:
         pokemon_image = f'image/{chosen_pokemon.lower()}.png'
         with open(pokemon_image, 'rb') as pokemon_photo:
             found_pokemon.append(chosen_pokemon)
-            sent_message = bot.send_photo(chat_id, pokemon_photo, caption=f"You found a {found_pokemon}! What would you like to do?", reply_markup=markup)
+            sent_message = bot.send_photo(chat_id, pokemon_photo, caption=f"You found a {chosen_pokemon}! What would you like to do?", reply_markup=markup)
             self.states[chat_id] = {'message_id': sent_message.message_id, 'state': 'choose_catch_or_skip'}
             
             
@@ -174,7 +140,8 @@ class PokemonBot:
         markup = types.InlineKeyboardMarkup()
         button_go = types.InlineKeyboardButton('Keep going', callback_data='go')
         markup.add(button_go)
-        bot.send_message(chat_id, "You captured a Pokemon!", reply_markup=markup)
+        self.capture_pokemon(chat_id, f"{found_pokemon[0]}")
+        bot.send_message(chat_id, f"You captured a {found_pokemon[0]}!", reply_markup=markup)
         
         #bot.delete_message(chat_id, message_id)
 
@@ -204,6 +171,10 @@ if __name__ == "__main__":
     def deploy_pokedex(message):
         chat_id = message.chat.id
         pokemon_bot.show_pokedex(chat_id)
+
+    @bot.message_handler(commands=['help'])
+    def help_command(message):
+            bot.send_message(message.chat.id, helpinfo, parse_mode='html')
         
     @bot.callback_query_handler(func=lambda call: call.data in ['go', 'keepgoing', 'skip', 'retry', 'catch'])
     def handle_go_callback_wrapper(call):
